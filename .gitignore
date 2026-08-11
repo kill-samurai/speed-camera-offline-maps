@@ -1,2 +1,14 @@
+.gradle/
+.idea/
+local.properties
+**/build/
+*.iml
+captures/
+signing/
+__pycache__/
+*.py[cod]
+tools/offline-packager/output/
+*.osm.pbf
+*.gpkg
 *.zip
 *.db
