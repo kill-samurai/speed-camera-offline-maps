@@ -17,6 +17,14 @@ Download `speed-camera-latest.apk` from the repository's [Latest APK release](ht
 
 Because all automated releases use the same private signing key and an increasing version code, a newer APK can update an earlier GitHub-built installation without uninstalling it first. Keep the local signing backup safe: losing it would prevent future builds from updating existing installations.
 
+To request a build without changing any source files, install and authenticate the [GitHub CLI](https://cli.github.com/), then run:
+
+```bash
+./trigger-github-build.sh
+```
+
+The script dispatches the workflow on `main`. An alternate branch can be supplied as its first argument, for example `./trigger-github-build.sh my-branch`.
+
 ## Requirements
 
 - Android Studio with JDK 17
