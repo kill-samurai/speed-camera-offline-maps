@@ -49,13 +49,13 @@ Address searches use the public OpenStreetMap Nominatim service, with the curren
 
 As-you-type address suggestions use Photon, are requested only after at least three characters and a short typing pause, and are biased toward the current GPS position. Selecting a suggestion passes its coordinates directly to routing. Nominatim remains the full-address fallback because its public usage policy does not permit autocomplete.
 
-The minimap uses a navigation arrow by default. The Marker control can select a custom image through Android's document picker or restore the default. The selected image is stored across app launches and appears in both the live camera overlay and recorded video. A square transparent PNG or WebP works best.
+The minimap uses a navigation arrow by default. Open the hamburger menu and choose **Marker** to select a custom image through Android's document picker or restore the default. The selected image is stored across app launches and appears in both the live camera overlay and recorded video. A square transparent PNG or WebP works best.
 
 The minimap shows surrounding streets beneath the route. When a regional offline package is installed, street geometry is read from the phone. Otherwise, the app loads OpenStreetMap standard raster tiles and caches them using Android's HTTP cache. Both versions remain translucent and rotate into the heading-up view.
 
-The Camera control lists the recording resolutions and frame-rate ranges reported by the active back camera. The selected values persist across launches and rebind the CameraX preview and recorder when applied. Frame rate defaults to Automatic, and settings cannot be changed during an active recording.
+The hamburger menu contains Camera, Marker, Offline Maps, and Stop Route when navigation is active. **Camera** lists the recording resolutions and frame-rate ranges reported by the active back camera. The selected values persist across launches and rebind the CameraX preview and recorder when applied. Frame rate defaults to Automatic, and settings cannot be changed during an active recording.
 
-During recording, the Camera and Marker controls are hidden, the record/stop control becomes red with a white outline, and a Pause control is shown. Pause and Resume continue writing to the same video file. Recording state is communicated by the controls rather than a separate “Recording…” status message.
+During recording, the hamburger is hidden, the record/stop control becomes red with a white outline, and a Pause control is shown. Pause and Resume continue writing to the same video file. Recording state is communicated by the controls rather than a separate status message. Save confirmation uses a short Android toast and does not remain over the camera.
 
 After a destination is successfully routed, the Destination control is hidden until navigation is stopped or the destination is reached.
 
@@ -88,6 +88,7 @@ The app automatically recalculates when the GPS position is more than 75 metres 
 ## Notes
 
 - The speed uses the device's location-reported speed and is lightly smoothed to reduce GPS jitter.
+- Location startup requests satellite GPS plus Android's network provider, which may use Wi-Fi and cellular positioning. A recent cached fix can start routing immediately; otherwise a selected destination starts automatically when the first usable location arrives.
 - The display currently uses kilometres per hour.
 - There is no background location access: location updates stop when the app is not visible.
 - The public OSRM endpoint is not a production SLA and may rate-limit or become unavailable.

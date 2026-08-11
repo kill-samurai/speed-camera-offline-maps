@@ -35,6 +35,7 @@
     <string name="marker_default_selected">Default navigation arrow selected</string>
     <string name="marker_load_error">Could not load that image</string>
     <string name="camera_settings_button">Camera</string>
+    <string name="settings_menu">Settings</string>
     <string name="camera_settings_title">Camera settings</string>
     <string name="camera_resolution">Recording resolution</string>
     <string name="camera_frame_rate">Frame rate</string>

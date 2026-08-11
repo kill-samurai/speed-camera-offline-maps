@@ -43,6 +43,7 @@ import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.PopupMenu
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
@@ -88,6 +89,7 @@ import kotlin.math.tan
 class MainActivity : AppCompatActivity() {
     private data class QualityOption(val quality: Quality, val label: String)
     private data class FrameRateOption(val range: Range<Int>?, val label: String)
+    private data class PendingNavigationRequest(val query: String, val destination: GeoPoint?)
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var locationManager: LocationManager
@@ -120,6 +122,8 @@ class MainActivity : AppCompatActivity() {
     private var frameRateOptions: List<FrameRateOption> = emptyList()
     private var selectedQuality: Quality = Quality.FHD
     private var selectedFrameRate: Range<Int>? = null
+    private var cameraSettingsAvailable = false
+    private var pendingNavigationRequest: PendingNavigationRequest? = null
 
     private val downloadReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -139,17 +143,12 @@ class MainActivity : AppCompatActivity() {
                 DownloadManager.STATUS_RUNNING,
                 DownloadManager.STATUS_PENDING,
                 DownloadManager.STATUS_PAUSED -> {
-                    if (progress.totalBytes > 0) {
-                        val percent = (progress.downloadedBytes * 100 / progress.totalBytes).toInt()
-                        binding.statusText.text = getString(R.string.offline_downloading, percent)
-                    }
                     mainHandler.postDelayed(this, OFFLINE_PROGRESS_INTERVAL_MS)
                 }
                 DownloadManager.STATUS_SUCCESSFUL ->
                     installOfflineDownload(offlineRegionManager.pendingDownloadId())
                 DownloadManager.STATUS_FAILED -> {
                     offlineRegionManager.clearFailedDownload()
-                    binding.statusText.text = getString(R.string.offline_error)
                     Toast.makeText(this@MainActivity, R.string.offline_error, Toast.LENGTH_LONG).show()
                 }
             }
@@ -171,12 +170,15 @@ class MainActivity : AppCompatActivity() {
 
     private val locationListener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
+            if (!shouldAcceptLocation(location)) return
             latestLocation = Location(location)
             updateSpeed(location)
             updateRouteProgress(location)
-
-            if (activeRecording == null && !routeRequestInFlight) {
-                binding.statusText.text = getString(R.string.camera_ready)
+            pendingNavigationRequest?.let { pending ->
+                if (!routeRequestInFlight) {
+                    pendingNavigationRequest = null
+                    resolveAndRoute(pending.query, pending.destination)
+                }
             }
         }
 
@@ -184,7 +186,15 @@ class MainActivity : AppCompatActivity() {
             if (!hasEnabledLocationProvider()) {
                 speedKph = null
                 smoothedSpeedKph = null
-                binding.statusText.text = getString(R.string.waiting_for_gps)
+            }
+        }
+
+        override fun onProviderEnabled(provider: String) {
+            if (provider == LocationManager.GPS_PROVIDER ||
+                provider == LocationManager.NETWORK_PROVIDER
+            ) {
+                stopLocationUpdates()
+                startLocationUpdatesIfAllowed()
             }
         }
     }
@@ -195,7 +205,7 @@ class MainActivity : AppCompatActivity() {
         if (grants[Manifest.permission.CAMERA] == true || hasPermission(Manifest.permission.CAMERA)) {
             startCamera()
         } else {
-            binding.statusText.text = getString(R.string.permission_needed)
+            Toast.makeText(this, R.string.permission_needed, Toast.LENGTH_LONG).show()
         }
         startLocationUpdatesIfAllowed()
     }
@@ -223,11 +233,8 @@ class MainActivity : AppCompatActivity() {
             if (activeRecording == null) startRecording() else stopRecording()
         }
         binding.destinationButton.setOnClickListener { showDestinationDialog() }
-        binding.stopNavigationButton.setOnClickListener { stopNavigation() }
-        binding.markerButton.setOnClickListener { showMarkerDialog() }
-        binding.cameraSettingsButton.setOnClickListener { showCameraSettingsDialog() }
+        binding.settingsMenuButton.setOnClickListener { showSettingsMenu() }
         binding.pauseButton.setOnClickListener { toggleRecordingPause() }
-        binding.offlineMapsButton.setOnClickListener { showOfflineMapsDialog() }
 
         ContextCompat.registerReceiver(
             this,
@@ -338,15 +345,46 @@ class MainActivity : AppCompatActivity() {
                 cameraPreview = preview
                 videoCapture = capture
                 binding.recordButton.isEnabled = true
-                binding.cameraSettingsButton.isEnabled = true
-                updateCameraSettingsButtonText()
+                cameraSettingsAvailable = true
             } catch (error: Exception) {
                 Log.e(LOG_TAG, "Could not bind camera with selected settings", error)
-                binding.statusText.text = error.message ?: getString(R.string.recording_error)
                 binding.recordButton.isEnabled = false
-                binding.cameraSettingsButton.isEnabled = cameraProvider != null
+                cameraSettingsAvailable = cameraProvider != null
+                Toast.makeText(
+                    this,
+                    error.message ?: getString(R.string.recording_error),
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun showSettingsMenu() {
+        if (activeRecording != null) return
+        PopupMenu(this, binding.settingsMenuButton).apply {
+            menu.add(
+                android.view.Menu.NONE,
+                MENU_CAMERA_SETTINGS,
+                0,
+                "${getString(R.string.camera_settings_button)} · ${cameraSettingsSummary()}"
+            ).isEnabled = cameraSettingsAvailable
+            menu.add(android.view.Menu.NONE, MENU_MARKER, 1, R.string.marker_button)
+            menu.add(android.view.Menu.NONE, MENU_OFFLINE_MAPS, 2, R.string.offline_maps_button)
+            if (NavigationOverlayState.current.route != null || pendingNavigationRequest != null) {
+                menu.add(android.view.Menu.NONE, MENU_STOP_ROUTE, 3, R.string.stop_navigation)
+            }
+            setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    MENU_CAMERA_SETTINGS -> showCameraSettingsDialog()
+                    MENU_MARKER -> showMarkerDialog()
+                    MENU_OFFLINE_MAPS -> showOfflineMapsDialog()
+                    MENU_STOP_ROUTE -> stopNavigation()
+                    else -> return@setOnMenuItemClickListener false
+                }
+                true
+            }
+            show()
+        }
     }
 
     private fun updateCameraOptions(cameraInfo: CameraInfo) {
@@ -438,9 +476,8 @@ class MainActivity : AppCompatActivity() {
                 selectedQuality = qualityOptions[resolutionSpinner.selectedItemPosition].quality
                 selectedFrameRate = frameRateOptions[fpsSpinner.selectedItemPosition].range
                 saveCameraSettings()
-                binding.cameraSettingsButton.isEnabled = false
+                cameraSettingsAvailable = false
                 binding.recordButton.isEnabled = false
-                binding.statusText.text = getString(R.string.camera_applying_settings)
                 startCamera()
             }
             .show()
@@ -459,10 +496,10 @@ class MainActivity : AppCompatActivity() {
         }.apply()
     }
 
-    private fun updateCameraSettingsButtonText() {
+    private fun cameraSettingsSummary(): String {
         val quality = qualityName(selectedQuality)
         val fps = selectedFrameRate?.let(::frameRateLabel) ?: getString(R.string.camera_fps_auto_short)
-        binding.cameraSettingsButton.text = getString(R.string.camera_settings_summary, quality, fps)
+        return getString(R.string.camera_settings_summary, quality, fps)
     }
 
     private fun qualityName(quality: Quality): String = when (quality) {
@@ -505,7 +542,6 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
-        binding.statusText.text = getString(R.string.offline_maps_loading)
         offlineExecutor.execute {
             runCatching { offlineRegionManager.fetchCatalog() }
                 .onSuccess { catalog -> runOnUiThread { showOfflineCatalog(catalog, installed) } }
@@ -513,7 +549,6 @@ class MainActivity : AppCompatActivity() {
                     Log.e(LOG_TAG, "Could not load offline map catalog", error)
                     runOnUiThread {
                         if (installed != null) showInstalledOfflineRegion(installed) else {
-                            binding.statusText.text = getString(R.string.offline_unavailable)
                             Toast.makeText(this, R.string.offline_unavailable, Toast.LENGTH_LONG).show()
                         }
                     }
@@ -555,7 +590,6 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
-        binding.statusText.text = getString(R.string.camera_ready)
     }
 
     private fun showInstalledOfflineRegion(installed: InstalledOfflineRegion) {
@@ -595,7 +629,6 @@ class MainActivity : AppCompatActivity() {
             builder.setPositiveButton(R.string.offline_download) { _, _ ->
                 runCatching { offlineRegionManager.startDownload(item) }
                     .onSuccess {
-                        binding.statusText.text = getString(R.string.offline_downloading, 0)
                         Toast.makeText(this, R.string.offline_download_started, Toast.LENGTH_SHORT).show()
                         mainHandler.removeCallbacks(offlineProgressRunnable)
                         mainHandler.post(offlineProgressRunnable)
@@ -630,14 +663,12 @@ class MainActivity : AppCompatActivity() {
     private fun installOfflineDownload(id: Long) {
         if (id < 0 || !offlineInstallInProgress.compareAndSet(false, true)) return
         mainHandler.removeCallbacks(offlineProgressRunnable)
-        binding.statusText.text = getString(R.string.offline_installing)
         offlineExecutor.execute {
             runCatching { offlineRegionManager.installCompletedDownload(id) }
                 .onSuccess { installed ->
                     offlineRegionStore.refresh()
                     runOnUiThread {
                         offlineInstallInProgress.set(false)
-                        binding.statusText.text = getString(R.string.camera_ready)
                         Toast.makeText(
                             this,
                             getString(R.string.offline_installed, installed.regionName),
@@ -654,7 +685,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun showOfflineError(error: Throwable) {
         Log.e(LOG_TAG, "Offline map operation failed", error)
-        binding.statusText.text = getString(R.string.offline_error)
         Toast.makeText(this, error.message ?: getString(R.string.offline_error), Toast.LENGTH_LONG).show()
     }
 
@@ -1425,13 +1455,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun resolveAndRoute(query: String, selectedDestination: GeoPoint? = null) {
         if (query.isBlank()) return
-        val originLocation = latestLocation
+        val originLocation = navigationOriginLocation()
         if (originLocation == null) {
-            Toast.makeText(this, R.string.waiting_for_location, Toast.LENGTH_LONG).show()
+            pendingNavigationRequest = PendingNavigationRequest(query, selectedDestination)
+            binding.destinationButton.visibility = View.GONE
+            startLocationUpdatesIfAllowed()
             return
         }
 
-        binding.statusText.text = getString(R.string.navigation_loading)
+        pendingNavigationRequest = null
         routeRequestInFlight = true
         val generation = routeGeneration.incrementAndGet()
         Log.i(LOG_TAG, "Destination requested; resolving address")
@@ -1453,7 +1485,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     if (generation != routeGeneration.get()) return@runOnUiThread
                     routeRequestInFlight = false
-                    binding.statusText.text = getString(R.string.route_error)
+                    binding.destinationButton.visibility = View.VISIBLE
                     Toast.makeText(this, error.message ?: getString(R.string.route_error), Toast.LENGTH_LONG).show()
                 }
             }
@@ -1515,6 +1547,7 @@ class MainActivity : AppCompatActivity() {
         if (recalculating) {
             NavigationOverlayState.update(NavigationOverlayState.current.copy(isRecalculating = true))
         }
+        offlineRegionStore.awaitInitialLoad()
         val route = if (!hasInternetConnectivity() && offlineRegionStore.hasRouting()) {
             offlineRoutingClient.route(origin, destination, label)
         } else {
@@ -1542,8 +1575,6 @@ class MainActivity : AppCompatActivity() {
         routeRequestInFlight = false
         runOnUiThread {
             binding.destinationButton.visibility = View.GONE
-            binding.stopNavigationButton.visibility = android.view.View.VISIBLE
-            binding.statusText.text = getString(R.string.navigation_ready)
         }
     }
 
@@ -1591,7 +1622,6 @@ class MainActivity : AppCompatActivity() {
             lastRerouteElapsedMs = now
             routeRequestInFlight = true
             val generation = routeGeneration.incrementAndGet()
-            binding.statusText.text = getString(R.string.off_route)
             routingExecutor.execute {
                 try {
                     requestRouteBlocking(
@@ -1619,35 +1649,107 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopNavigation() {
         routeGeneration.incrementAndGet()
+        pendingNavigationRequest = null
         NavigationOverlayState.clear()
         routePersistence.clear()
         routeRequestInFlight = false
         speedKph = 0f
         smoothedSpeedKph = 0f
         lastLocationRealtimeNanos = SystemClock.elapsedRealtimeNanos()
-        binding.stopNavigationButton.visibility = android.view.View.GONE
         binding.destinationButton.visibility = View.VISIBLE
-        if (activeRecording == null) binding.statusText.text = getString(R.string.camera_ready)
     }
 
     @SuppressLint("MissingPermission")
     private fun startLocationUpdatesIfAllowed() {
-        if (locationUpdatesActive || !hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) return
+        if (locationUpdatesActive || !hasAnyLocationPermission()) return
 
-        locationUpdatesActive = true
-        val provider = LocationManager.GPS_PROVIDER
-        val available = locationManager.allProviders.contains(provider)
-        if (available) {
+        seedRecentLastKnownLocation()
+        var requestedProvider = false
+        if (hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
+            requestedProvider = requestLocationProvider(
+                LocationManager.GPS_PROVIDER,
+                LOCATION_UPDATE_INTERVAL_MS
+            ) || requestedProvider
+        }
+        requestedProvider = requestLocationProvider(
+            LocationManager.NETWORK_PROVIDER,
+            NETWORK_LOCATION_UPDATE_INTERVAL_MS
+        ) || requestedProvider
+        requestedProvider = requestLocationProvider(
+            LocationManager.PASSIVE_PROVIDER,
+            NETWORK_LOCATION_UPDATE_INTERVAL_MS
+        ) || requestedProvider
+        locationUpdatesActive = requestedProvider
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestLocationProvider(provider: String, intervalMs: Long): Boolean {
+        if (provider !in locationManager.allProviders || !isProviderEnabled(provider)) return false
+        return runCatching {
             locationManager.requestLocationUpdates(
                 provider,
-                LOCATION_UPDATE_INTERVAL_MS,
+                intervalMs,
                 0f,
                 locationListener,
                 Looper.getMainLooper()
             )
+            true
+        }.onFailure { Log.w(LOG_TAG, "Could not request $provider location updates", it) }
+            .getOrDefault(false)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun seedRecentLastKnownLocation() {
+        val providers = buildList {
+            if (hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) add(LocationManager.GPS_PROVIDER)
+            add(LocationManager.NETWORK_PROVIDER)
+            add(LocationManager.PASSIVE_PROVIDER)
         }
-        if (!available || !locationManager.isProviderEnabled(provider)) {
-            binding.statusText.text = getString(R.string.waiting_for_gps)
+        val cached = providers.asSequence()
+            .filter { it in locationManager.allProviders }
+            .mapNotNull { provider ->
+                runCatching { locationManager.getLastKnownLocation(provider) }
+                    .onFailure { Log.w(LOG_TAG, "Could not read cached $provider location", it) }
+                    .getOrNull()
+            }
+            .filter { locationAgeMillis(it) <= MAX_CACHED_LOCATION_AGE_MS }
+            .minByOrNull(::locationAgeMillis)
+            ?: return
+        if (latestLocation == null || shouldAcceptLocation(cached)) {
+            latestLocation = Location(cached)
+        }
+    }
+
+    private fun navigationOriginLocation(): Location? {
+        val current = latestLocation
+        if (current != null && locationAgeMillis(current) <= MAX_CACHED_LOCATION_AGE_MS) {
+            return Location(current)
+        }
+        seedRecentLastKnownLocation()
+        return latestLocation?.takeIf { locationAgeMillis(it) <= MAX_CACHED_LOCATION_AGE_MS }
+            ?.let(::Location)
+    }
+
+    private fun shouldAcceptLocation(candidate: Location): Boolean {
+        val previous = latestLocation ?: return true
+        if (candidate.provider == LocationManager.GPS_PROVIDER) return true
+        if (previous.provider == LocationManager.GPS_PROVIDER &&
+            locationAgeMillis(previous) <= GPS_PREFERENCE_WINDOW_MS
+        ) {
+            return false
+        }
+        val candidateNanos = candidate.elapsedRealtimeNanos
+        val previousNanos = previous.elapsedRealtimeNanos
+        return candidateNanos >= previousNanos ||
+            candidate.hasAccuracy() && previous.hasAccuracy() && candidate.accuracy + 50f < previous.accuracy
+    }
+
+    private fun locationAgeMillis(location: Location): Long {
+        val elapsedNanos = location.elapsedRealtimeNanos
+        return if (elapsedNanos > 0L) {
+            ((SystemClock.elapsedRealtimeNanos() - elapsedNanos) / 1_000_000L).coerceAtLeast(0L)
+        } else {
+            (System.currentTimeMillis() - location.time).coerceAtLeast(0L)
         }
     }
 
@@ -1657,8 +1759,16 @@ class MainActivity : AppCompatActivity() {
         locationUpdatesActive = false
     }
 
+    private fun hasAnyLocationPermission(): Boolean =
+        hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
+            hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+
+    private fun isProviderEnabled(provider: String): Boolean =
+        runCatching { locationManager.isProviderEnabled(provider) }.getOrDefault(false)
+
     private fun hasEnabledLocationProvider(): Boolean =
-        locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+        isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+            isProviderEnabled(LocationManager.NETWORK_PROVIDER)
 
     private fun hasInternetConnectivity(): Boolean {
         val manager = getSystemService(ConnectivityManager::class.java)
@@ -1680,7 +1790,6 @@ class MainActivity : AppCompatActivity() {
             )
         )
         binding.destinationButton.visibility = View.GONE
-        binding.stopNavigationButton.visibility = View.VISIBLE
     }
 
     @SuppressLint("MissingPermission")
@@ -1701,10 +1810,7 @@ class MainActivity : AppCompatActivity() {
         if (hasPermission(Manifest.permission.RECORD_AUDIO)) pending = pending.withAudioEnabled()
 
         binding.recordButton.isEnabled = false
-        binding.cameraSettingsButton.visibility = View.GONE
-        binding.markerButton.visibility = View.GONE
-        binding.offlineMapsButton.visibility = View.GONE
-        binding.statusText.visibility = View.GONE
+        binding.settingsMenuButton.visibility = View.GONE
         recordingPaused = false
         try {
             activeRecording = pending.start(ContextCompat.getMainExecutor(this)) { event ->
@@ -1739,14 +1845,12 @@ class MainActivity : AppCompatActivity() {
                         restoreNonRecordingControls()
 
                         if (event.hasError()) {
-                            binding.statusText.text = getString(R.string.recording_error)
                             Toast.makeText(
                                 this,
                                 event.cause?.message ?: getString(R.string.recording_error),
                                 Toast.LENGTH_LONG
                             ).show()
                         } else {
-                            binding.statusText.text = getString(R.string.video_saved)
                             Toast.makeText(this, R.string.video_saved, Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -1773,12 +1877,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun restoreNonRecordingControls() {
-        binding.cameraSettingsButton.visibility = View.VISIBLE
-        binding.markerButton.visibility = View.VISIBLE
-        binding.offlineMapsButton.visibility = View.VISIBLE
+        binding.settingsMenuButton.visibility = View.VISIBLE
         binding.pauseButton.visibility = View.GONE
         binding.pauseButton.isEnabled = false
-        binding.statusText.visibility = View.VISIBLE
     }
 
     private fun Location.toGeoPoint() = GeoPoint(latitude, longitude)
@@ -1787,7 +1888,14 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val LOG_TAG = "SpeedCamera"
+        private const val MENU_CAMERA_SETTINGS = 1
+        private const val MENU_MARKER = 2
+        private const val MENU_OFFLINE_MAPS = 3
+        private const val MENU_STOP_ROUTE = 4
         private const val LOCATION_UPDATE_INTERVAL_MS = 250L
+        private const val NETWORK_LOCATION_UPDATE_INTERVAL_MS = 1_000L
+        private const val MAX_CACHED_LOCATION_AGE_MS = 30L * 60L * 1_000L
+        private const val GPS_PREFERENCE_WINDOW_MS = 10_000L
         private const val LOCATION_STALE_NANOS = 5_000_000_000L
         private const val SPEED_SMOOTHING_OLD = 0.65f
         private const val SPEED_SMOOTHING_NEW = 0.35f

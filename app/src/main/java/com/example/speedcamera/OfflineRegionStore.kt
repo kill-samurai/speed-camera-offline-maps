@@ -6,7 +6,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.text.Normalizer
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.cos
 
@@ -25,6 +27,7 @@ class OfflineRegionStore(private val manager: OfflineRegionManager) {
 
     private val mapExecutor = Executors.newSingleThreadExecutor()
     private val refreshPending = AtomicBoolean(false)
+    private val initialLoad = CountDownLatch(1)
     private val databaseLock = Any()
     private var database: SQLiteDatabase? = null
 
@@ -43,24 +46,32 @@ class OfflineRegionStore(private val manager: OfflineRegionManager) {
 
     fun refresh() {
         mapExecutor.execute {
-            synchronized(databaseLock) {
-                database?.close()
-                database = null
-                capabilities = emptySet()
-                roadCache = null
-                val installed = manager.installedRegion() ?: return@synchronized
-                runCatching {
-                    SQLiteDatabase.openDatabase(
-                        installed.databasePath,
-                        null,
-                        SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS
-                    )
-                }.onSuccess { opened ->
-                    database = opened
-                    capabilities = readCapabilities(opened)
-                }.onFailure { Log.e(LOG_TAG, "Could not open offline region database", it) }
+            try {
+                synchronized(databaseLock) {
+                    database?.close()
+                    database = null
+                    capabilities = emptySet()
+                    roadCache = null
+                    val installed = manager.installedRegion() ?: return@synchronized
+                    runCatching {
+                        SQLiteDatabase.openDatabase(
+                            installed.databasePath,
+                            null,
+                            SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS
+                        )
+                    }.onSuccess { opened ->
+                        database = opened
+                        capabilities = readCapabilities(opened)
+                    }.onFailure { Log.e(LOG_TAG, "Could not open offline region database", it) }
+                }
+            } finally {
+                initialLoad.countDown()
             }
         }
+    }
+
+    fun awaitInitialLoad() {
+        initialLoad.await(INITIAL_LOAD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
     }
 
     fun closeRegion() {
@@ -197,5 +208,6 @@ class OfflineRegionStore(private val manager: OfflineRegionManager) {
 
     companion object {
         private const val LOG_TAG = "SpeedCamera"
+        private const val INITIAL_LOAD_TIMEOUT_SECONDS = 5L
     }
 }
