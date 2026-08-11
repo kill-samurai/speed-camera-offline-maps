@@ -3,7 +3,9 @@
 
 import argparse
 import heapq
+import json
 import math
+import re
 import sqlite3
 import time
 
@@ -76,26 +78,59 @@ def route(db, origin, destination, heuristic_weight):
     return visited, count, route_distance, costs[target]
 
 
+def parse_point(value):
+    try:
+        latitude, longitude = (float(part.strip()) for part in value.split(","))
+    except (ValueError, TypeError):
+        raise argparse.ArgumentTypeError("point must be latitude,longitude")
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        raise argparse.ArgumentTypeError("point is outside valid latitude/longitude ranges")
+    return latitude, longitude
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("database")
     parser.add_argument("--weight", type=float, default=1.0)
+    parser.add_argument("--search", help="Place or address text expected in the package")
+    parser.add_argument("--origin", type=parse_point, help="Route start as latitude,longitude")
+    parser.add_argument("--destination", type=parse_point, help="Route end as latitude,longitude")
     args = parser.parse_args()
     db = sqlite3.connect(f"file:{args.database}?mode=ro", uri=True)
-    result = db.execute(
-        """SELECT p.display_name,p.latitude,p.longitude FROM place_search
-           JOIN places p ON p.place_id=place_search.rowid
-           WHERE place_search MATCH 'galeras*' LIMIT 1"""
-    ).fetchone()
-    assert result and "Galeras" in result[0]
-    started = time.monotonic()
-    visited, points, meters, seconds = route(
-        db, (18.4861, -69.9312), (result[1], result[2]), args.weight
-    )
-    print(
-        f"Search: {result[0]}\nRoute: {meters/1000:.1f} km, {seconds/3600:.1f} h, "
-        f"{points:,} points, {visited:,} visited nodes, {time.monotonic()-started:.1f}s"
-    )
+    metadata = dict(db.execute("SELECT key,value FROM metadata"))
+    roads = db.execute("SELECT COUNT(*) FROM roads").fetchone()[0]
+    region_name = json.loads(metadata["name"]) if "name" in metadata else "unknown"
+    print(f"Region: {region_name}\nRoads: {roads:,}")
+
+    search_result = None
+    if args.search:
+        terms = [term for term in re.findall(r"[^\W_]+", args.search.lower(), re.UNICODE) if term]
+        if not terms:
+            parser.error("--search must contain letters or numbers")
+        query = " ".join(f"{term}*" for term in terms)
+        search_result = db.execute(
+            """SELECT p.display_name,p.latitude,p.longitude FROM place_search
+               JOIN places p ON p.place_id=place_search.rowid
+               WHERE place_search MATCH ? LIMIT 1""",
+            (query,),
+        ).fetchone()
+        if not search_result:
+            raise RuntimeError(f"Search did not find: {args.search}")
+        print(f"Search: {search_result[0]} ({search_result[1]:.6f},{search_result[2]:.6f})")
+
+    destination = args.destination
+    if args.origin and destination is None and search_result:
+        destination = search_result[1], search_result[2]
+    if bool(args.origin) != bool(destination):
+        parser.error("routing requires --origin and either --destination or a successful --search")
+    if args.origin and destination:
+        started = time.monotonic()
+        visited, points, meters, seconds = route(db, args.origin, destination, args.weight)
+        print(
+            f"Route: {meters/1000:.1f} km, {seconds/3600:.1f} h, "
+            f"{points:,} points, {visited:,} visited nodes, {time.monotonic()-started:.1f}s"
+        )
+    db.close()
 
 
 if __name__ == "__main__":

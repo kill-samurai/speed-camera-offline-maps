@@ -14,14 +14,23 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.zip.ZipInputStream
 
-class OfflineRegionManager(private val context: Context) {
+class OfflineRegionManager(
+    private val context: Context,
+    private val catalogUrl: String = BuildConfig.OFFLINE_CATALOG_URL,
+) {
     data class DownloadProgress(val status: Int, val downloadedBytes: Long, val totalBytes: Long)
 
     private val downloadManager = context.getSystemService(DownloadManager::class.java)
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
+    val isCatalogConfigured: Boolean
+        get() = catalogUrl.isNotBlank()
+
     fun fetchCatalog(): OfflineCatalog {
-        val connection = URL(CATALOG_URL).openConnection() as HttpURLConnection
+        require(isCatalogConfigured) { "This build has no offline map catalog configured" }
+        val url = URL(catalogUrl)
+        require(url.protocol == "https") { "The offline map catalog must use HTTPS" }
+        val connection = url.openConnection() as HttpURLConnection
         return try {
             connection.connectTimeout = 10_000
             connection.readTimeout = 20_000
@@ -207,8 +216,6 @@ class OfflineRegionManager(private val context: Context) {
     }
 
     companion object {
-        const val CATALOG_URL =
-            "https://raw.githubusercontent.com/kill-samurai/speed-camera-offline-maps/main/catalog.json"
         private const val PREFERENCES_NAME = "offline_region_download"
         private const val PENDING_DOWNLOAD_ID = "pending_download_id"
         private const val PENDING_PACKAGE_JSON = "pending_package_json"

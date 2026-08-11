@@ -492,8 +492,20 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.camera_settings_while_recording, Toast.LENGTH_LONG).show()
             return
         }
-        binding.statusText.text = getString(R.string.offline_maps_loading)
         val installed = offlineRegionManager.installedRegion()
+        if (!offlineRegionManager.isCatalogConfigured) {
+            if (installed != null) {
+                showInstalledOfflineRegion(installed)
+            } else {
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.offline_maps_title)
+                    .setMessage(R.string.offline_catalog_not_configured)
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show()
+            }
+            return
+        }
+        binding.statusText.text = getString(R.string.offline_maps_loading)
         offlineExecutor.execute {
             runCatching { offlineRegionManager.fetchCatalog() }
                 .onSuccess { catalog -> runOnUiThread { showOfflineCatalog(catalog, installed) } }

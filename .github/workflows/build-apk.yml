@@ -22,6 +22,7 @@ jobs:
     env:
       SPEED_CAMERA_VERSION_CODE: ${{ github.run_number }}
       SPEED_CAMERA_VERSION_NAME: 1.0.${{ github.run_number }}
+      SPEED_CAMERA_OFFLINE_CATALOG_URL: ${{ github.repository == 'kill-samurai/speed-camera-offline-maps' && 'https://github.com/kill-samurai/speed-camera-offline-maps/releases/download/maps-2026-08-11/catalog.json' || vars.OFFLINE_CATALOG_URL }}
 
     steps:
       - name: Check out source
@@ -35,7 +36,7 @@ jobs:
           cache: gradle
 
       - name: Restore signing key
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.repository == 'kill-samurai/speed-camera-offline-maps'
         env:
           SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
         run: |
@@ -47,7 +48,7 @@ jobs:
         run: ./gradlew testDebugUnitTest lintDebug assembleDebug
 
       - name: Test, lint, and build signed release
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.repository == 'kill-samurai/speed-camera-offline-maps'
         env:
           SPEED_CAMERA_KEYSTORE_PATH: ${{ runner.temp }}/speed-camera-release.jks
           SPEED_CAMERA_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
@@ -55,24 +56,32 @@ jobs:
           SPEED_CAMERA_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: ./gradlew testDebugUnitTest lintRelease assembleRelease
 
+      - name: Test, lint, and build fork
+        if: github.event_name != 'pull_request' && github.repository != 'kill-samurai/speed-camera-offline-maps'
+        run: ./gradlew testDebugUnitTest lintDebug assembleDebug
+
       - name: Prepare APK artifact
         if: github.event_name != 'pull_request'
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/speed-camera-latest.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose dist/speed-camera-latest.apk
+          if [ "$GITHUB_REPOSITORY" = "kill-samurai/speed-camera-offline-maps" ]; then
+            cp app/build/outputs/apk/release/app-release.apk dist/speed-camera-latest.apk
+          else
+            cp app/build/outputs/apk/debug/app-debug.apk dist/speed-camera-fork-debug.apk
+          fi
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose dist/*.apk
 
       - name: Upload workflow artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v6
         with:
           name: speed-camera-apk
-          path: dist/speed-camera-latest.apk
+          path: dist/*.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish rolling GitHub release
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.repository == 'kill-samurai/speed-camera-offline-maps'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

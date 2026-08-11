@@ -1,7 +1,30 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+val localBuildProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+}
+
+fun quotedBuildConfigValue(value: String): String = buildString {
+    append('"')
+    value.forEach { character ->
+        when (character) {
+            '\\' -> append("\\\\")
+            '"' -> append("\\\"")
+            else -> append(character)
+        }
+    }
+    append('"')
+}
+
+val offlineCatalogUrl = providers.environmentVariable("SPEED_CAMERA_OFFLINE_CATALOG_URL").orNull
+    ?: providers.gradleProperty("speedCameraOfflineCatalogUrl").orNull
+    ?: localBuildProperties.getProperty("speedCameraOfflineCatalogUrl")
+    ?: ""
 
 val releaseSigningAvailable = listOf(
     "SPEED_CAMERA_KEYSTORE_PATH",
@@ -22,10 +45,12 @@ android {
         versionName = System.getenv("SPEED_CAMERA_VERSION_NAME") ?: "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "OFFLINE_CATALOG_URL", quotedBuildConfigValue(offlineCatalogUrl))
     }
 
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 
     compileOptions {

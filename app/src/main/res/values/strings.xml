@@ -71,4 +71,5 @@
     <string name="offline_removed">Offline map removed</string>
     <string name="offline_error">Offline map operation failed</string>
     <string name="offline_unavailable">The package catalog is unavailable. Check the internet connection or GitHub repository.</string>
+    <string name="offline_catalog_not_configured">This build does not include an offline map catalog. The repository owner must create and publish regional packages, then configure SPEED_CAMERA_OFFLINE_CATALOG_URL for the build.</string>
 </resources>

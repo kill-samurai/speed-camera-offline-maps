@@ -74,7 +74,7 @@ Before starting, the app shows the package's exact download and installed sizes,
 
 If the full package is installed, the app uses it automatically when there is no validated internet connection. It also falls back to it when the online routing request fails. An active route is saved locally so it can survive an app-process restart. GPS positioning and speed measurement continue without internet access.
 
-Packages are published as GitHub Release assets in the public [speed-camera-offline-maps repository](https://github.com/kill-samurai/speed-camera-offline-maps). The app reads that repository's `catalog.json`, so a later regional package can be published without rebuilding the APK. See [tools/offline-packager/README.md](tools/offline-packager/README.md) for the reproducible package-generation and validation commands.
+Packages are published as GitHub Release assets in the public [speed-camera-offline-maps repository](https://github.com/kill-samurai/speed-camera-offline-maps). The official build receives the release catalog URL during GitHub Actions. Forks receive no upstream catalog or map packages by default. See [Custom offline maps for a fork](docs/CUSTOM_OFFLINE_MAPS.md) to generate, validate, publish, and configure a different region.
 
 ### Emulator navigation test
 

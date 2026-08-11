@@ -2,7 +2,6 @@
 
 set -euo pipefail
 
-REPOSITORY="${SPEED_CAMERA_GITHUB_REPOSITORY:-kill-samurai/speed-camera-offline-maps}"
 WORKFLOW="build-apk.yml"
 BRANCH="${1:-main}"
 
@@ -14,6 +13,13 @@ fi
 if ! gh auth status >/dev/null 2>&1; then
     echo "GitHub CLI is not authenticated. Run: gh auth login" >&2
     exit 1
+fi
+
+if [ -n "${SPEED_CAMERA_GITHUB_REPOSITORY:-}" ]; then
+    REPOSITORY="$SPEED_CAMERA_GITHUB_REPOSITORY"
+else
+    REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
+    REPOSITORY="${REPOSITORY:-kill-samurai/speed-camera-offline-maps}"
 fi
 
 gh workflow run "$WORKFLOW" --repo "$REPOSITORY" --ref "$BRANCH"

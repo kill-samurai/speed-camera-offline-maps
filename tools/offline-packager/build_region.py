@@ -80,11 +80,13 @@ class RegionBuilder(osmium.SimpleHandler):
         database: sqlite3.Connection,
         bbox: tuple[float, float, float, float],
         junction_nodes: set[int],
+        region_name: str,
     ):
         super().__init__()
         self.database = database
         self.min_lon, self.min_lat, self.max_lon, self.max_lat = bbox
         self.junction_nodes = junction_nodes
+        self.region_name = region_name
         self.road_count = 0
         self.edge_count = 0
         self.place_count = 0
@@ -182,7 +184,7 @@ class RegionBuilder(osmium.SimpleHandler):
 
         if name:
             middle = locations[len(locations) // 2]
-            self.insert_place(-way.id, name, f"{name}, Dominican Republic", middle[0], middle[1], "road")
+            self.insert_place(-way.id, name, f"{name}, {self.region_name}", middle[0], middle[1], "road")
 
         if self.road_count % 10_000 == 0:
             elapsed = time.monotonic() - self.started
@@ -195,7 +197,7 @@ class RegionBuilder(osmium.SimpleHandler):
         if not name:
             return
         locality = tags.get("addr:city") or tags.get("addr:place") or tags.get("addr:suburb") or ""
-        display = ", ".join(value for value in (name, locality, "Dominican Republic") if value)
+        display = ", ".join(value for value in (name, locality, self.region_name) if value)
         kind = tags.get("place") or tags.get("amenity") or tags.get("shop") or "address"
         self.insert_place(osm_id, name, display, latitude, longitude, kind)
 
@@ -336,24 +338,34 @@ def main() -> None:
     parser.add_argument("--pbf", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--version", required=True)
+    parser.add_argument("--region-id", required=True, help="Short lowercase ID, for example do or us-fl")
+    parser.add_argument("--region-name", required=True, help="Human-readable name shown in the app")
     parser.add_argument("--base-url", default="")
-    parser.add_argument("--bbox", default="-72.1,17.4,-68.2,20.1")
+    parser.add_argument("--bbox", required=True, help="minLon,minLat,maxLon,maxLat")
     args = parser.parse_args()
 
-    bbox = tuple(float(value) for value in args.bbox.split(","))
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", args.region_id):
+        parser.error("--region-id must contain lowercase letters, numbers, or hyphens")
+    try:
+        bbox = tuple(float(value) for value in args.bbox.split(","))
+    except ValueError:
+        parser.error("--bbox must be minLon,minLat,maxLon,maxLat")
     if len(bbox) != 4:
         parser.error("--bbox must be minLon,minLat,maxLon,maxLat")
+    min_lon, min_lat, max_lon, max_lat = bbox
+    if not (-180 <= min_lon < max_lon <= 180 and -90 <= min_lat < max_lat <= 90):
+        parser.error("--bbox coordinates are invalid or not ordered min-to-max")
     args.output.mkdir(parents=True, exist_ok=True)
-    full_database = args.output / "dominican-republic-full.db"
-    map_database = args.output / "dominican-republic-map.db"
+    full_database = args.output / f"{args.region_id}-full.db"
+    map_database = args.output / f"{args.region_id}-map.db"
     for path in (full_database, map_database):
         if path.exists():
             path.unlink()
 
     metadata = {
         "formatVersion": 1,
-        "regionId": "do",
-        "name": "Dominican Republic",
+        "regionId": args.region_id,
+        "name": args.region_name,
         "version": args.version,
         "bbox": bbox,
         "source": "© OpenStreetMap contributors · Geofabrik extract",
@@ -368,7 +380,7 @@ def main() -> None:
     print(f"Found {len(junction_nodes):,} shared road nodes", flush=True)
     del junction_counter
 
-    builder = RegionBuilder(database, bbox, junction_nodes)
+    builder = RegionBuilder(database, bbox, junction_nodes, args.region_name)
     database.execute("BEGIN")
     builder.apply_file(str(args.pbf), locations=True, idx="flex_mem")
     database.commit()
@@ -382,7 +394,7 @@ def main() -> None:
         ("map", map_database, ["map"]),
         ("full", full_database, ["map", "search", "routing"]),
     ):
-        filename = f"dominican-republic-{package_type}-{args.version}.zip"
+        filename = f"{args.region_id}-{package_type}-{args.version}.zip"
         archive_path = args.output / filename
         package_metadata = dict(metadata, capabilities=capabilities, installedBytes=database_path.stat().st_size)
         zip_database(database_path, archive_path, package_metadata)
@@ -400,7 +412,13 @@ def main() -> None:
     catalog = {
         "formatVersion": 1,
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "regions": [{"id": "do", "name": "Dominican Republic", "version": args.version, "bbox": bbox, "packages": packages}],
+        "regions": [{
+            "id": args.region_id,
+            "name": args.region_name,
+            "version": args.version,
+            "bbox": bbox,
+            "packages": packages,
+        }],
     }
     (args.output / "catalog.json").write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(catalog, indent=2))
